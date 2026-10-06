@@ -6,7 +6,13 @@ using System.Threading.Tasks;
 
 namespace VkToolRunBMWBT.Model
 {
-    internal class HardwareInfo
+
+    // для сведений о конфигурации ПК
+    public class HardwareInfo
     {
+        public string CpuName { get; set; } = "Не найдено";
+        public string GpuName { get; set; } = "Не найдено";
+        public string RamName { get; set; } = "Не найдено";
+        public string OsVersion { get; set; } = "Не найдено";
     }
 }

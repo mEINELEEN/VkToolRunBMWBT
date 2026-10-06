@@ -1,17 +1,24 @@
+using System;
+using System.Windows.Forms;
+using VkToolRunBMWBT.View;
+using VkToolRunBMWBT.Presenter;
+
 namespace VkToolRunBMWBT
 {
     internal static class Program
     {
-        /// <summary>
-        ///  The main entry point for the application.
-        /// </summary>
+
         [STAThread]
         static void Main()
         {
-            // To customize application configuration such as set high DPI settings or default font,
-            // see https://aka.ms/applicationconfiguration.
+
             ApplicationConfiguration.Initialize();
-            Application.Run(new MainForm());
+
+            // создаем view и presenter
+            var mainForm = new MainForm();
+            var presenter = new MainPresenter(mainForm);
+
+            Application.Run(mainForm);
         }
     }
 }
