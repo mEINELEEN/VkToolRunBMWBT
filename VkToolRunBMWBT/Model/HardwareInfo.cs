@@ -12,7 +12,7 @@ namespace VkToolRunBMWBT.Model
     {
         public string CpuName { get; set; } = "Не найдено";
         public string GpuName { get; set; } = "Не найдено";
-        public string RamName { get; set; } = "Не найдено";
+        public string RamCapacity { get; set; } = "Не найдено";
         public string OsVersion { get; set; } = "Не найдено";
     }
 }

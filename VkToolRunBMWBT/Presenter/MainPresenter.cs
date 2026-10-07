@@ -5,6 +5,7 @@ using System.Text;
 using System.Threading.Tasks;
 using VkToolRunBMWBT.View;
 using VkToolRunBMWBT.Model;
+using VkToolRunBMWBT.Services;
 
 namespace VkToolRunBMWBT.Presenter
 {
@@ -29,9 +30,10 @@ namespace VkToolRunBMWBT.Presenter
             {
                 
                 _view.UpdateStatus("Сбор информации о компе...", 10);
-                await Task.Delay(500); // имитация задержки
-                
-                _view.UpdateStatus("Запуск теста CPU...", 30);
+                var hardwareInfo = await Task.Run(() => HardwareService.GetSystemInfo());
+                _view.DisplayHardwareInfo(hardwareInfo);
+
+                _view.UpdateStatus("Запуск теста CPU...", 40);
                 await Task.Delay(1000); // имитация задержки
 
                 _view.UpdateStatus("Запуск теста GPU...", 70);
