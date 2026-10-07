@@ -9,11 +9,8 @@ using VkToolRunBMWBT.Model;
 
 namespace VkToolRunBMWBT.Services
 {
- public static class ResultParserService
+    public static class ResultParserService
     {
-        /// <summary>
-        /// Находит последний созданный лог/отчет и парсит результаты
-        /// </summary>
         public static BenchmarkResult GetLatestResult(string testName, string expectedResolution, string expectedScale)
         {
             var result = new BenchmarkResult
@@ -25,49 +22,48 @@ namespace VkToolRunBMWBT.Services
 
             try
             {
-                // Потенциальные пути сохранения отчетов Unreal Engine 5
+                var candidateDirectories = new List<string>();
+
+                // 1. Путь к папке Saved на внешнем накопителе
+                if (!string.IsNullOrEmpty(RunnerService.DetectedSavedFolderPath))
+                {
+                    candidateDirectories.Add(RunnerService.DetectedSavedFolderPath);
+                }
+
+                // 2. Стандартная папка %LOCALAPPDATA%\b1\Saved на диске C:
                 string localAppDataSaved = Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"b1\Saved");
-
-                string[] candidateDirectories = new[]
-                {
-                    Path.Combine(localAppDataSaved, "BenchmarkResult"),
-                    Path.Combine(localAppDataSaved, "Logs"),
-                    localAppDataSaved
-                };
-
-                FileInfo latestFile = null;
+                candidateDirectories.Add(localAppDataSaved);
 
                 foreach (var dirPath in candidateDirectories)
                 {
                     if (Directory.Exists(dirPath))
                     {
                         var dir = new DirectoryInfo(dirPath);
-                        // Ищем последние текстовые логи, csv или json файлы
-                        var file = dir.GetFiles("*.*", SearchOption.AllDirectories)
-                                      .Where(f => f.Extension.Equals(".txt", StringComparison.OrdinalIgnoreCase) ||
-                                                  f.Extension.Equals(".csv", StringComparison.OrdinalIgnoreCase) ||
-                                                  f.Extension.Equals(".log", StringComparison.OrdinalIgnoreCase) ||
-                                                  f.Extension.Equals(".json", StringComparison.OrdinalIgnoreCase))
-                                      .OrderByDescending(f => f.LastWriteTime)
-                                      .FirstOrDefault();
+                        // Рекурсивно ищем все файлы .sav, .temp, .log, .txt, .json
+                        var files = dir.GetFiles("*.*", SearchOption.AllDirectories)
+                                       .Where(f => f.Extension.Equals(".sav", StringComparison.OrdinalIgnoreCase) ||
+                                                   f.Extension.Equals(".temp", StringComparison.OrdinalIgnoreCase) ||
+                                                   f.Extension.Equals(".log", StringComparison.OrdinalIgnoreCase) ||
+                                                   f.Extension.Equals(".txt", StringComparison.OrdinalIgnoreCase) ||
+                                                   f.Extension.Equals(".json", StringComparison.OrdinalIgnoreCase) ||
+                                                   f.Extension.Equals(".csv", StringComparison.OrdinalIgnoreCase))
+                                       .OrderByDescending(f => f.LastWriteTime);
 
-                        if (file != null && (latestFile == null || file.LastWriteTime > latestFile.LastWriteTime))
+                        foreach (var file in files)
                         {
-                            latestFile = file;
+                            string textContent = ReadFileWithMultipleEncodings(file.FullName);
+                            if (ParseContent(textContent, result))
+                            {
+                                break;
+                            }
                         }
+
+                        if (result.AverageFps > 0) break;
                     }
                 }
 
-                if (latestFile != null)
-                {
-                    string content = File.ReadAllText(latestFile.FullName);
-                    ParseFileContent(content, result);
-                }
-                else
-                {
-                    result.RawSettingSummary = $"Разрешение: {expectedResolution}, Масштаб: {expectedScale}";
-                }
+                result.RawSettingSummary = $"Разрешение: {result.Resolution}, Масштаб: {result.RenderScale}";
             }
             catch (Exception ex)
             {
@@ -77,44 +73,54 @@ namespace VkToolRunBMWBT.Services
             return result;
         }
 
-        private static void ParseFileContent(string content, BenchmarkResult result)
+        /// <summary>
+        /// Безопасное чтение байтов файла и двойное декодирование (UTF-8 и UTF-16LE Unicode)
+        /// </summary>
+        private static string ReadFileWithMultipleEncodings(string filePath)
         {
-            string[] lines = content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.RemoveEmptyEntries);
-
-            foreach (var line in lines)
+            try
             {
-                if (line.Contains("Average FPS", StringComparison.OrdinalIgnoreCase) ||
-                    line.Contains("Avg FPS", StringComparison.OrdinalIgnoreCase) ||
-                    line.Contains("AverageFPS", StringComparison.OrdinalIgnoreCase) ||
-                    line.Contains("Средний FPS", StringComparison.OrdinalIgnoreCase))
+                byte[] bytes;
+                using (var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
                 {
-                    double val = ExtractNumberFromLine(line);
-                    if (val > 0) result.AverageFps = val;
+                    bytes = new byte[stream.Length];
+                    stream.Read(bytes, 0, bytes.Length);
                 }
-                else if (line.Contains("99%", StringComparison.OrdinalIgnoreCase) ||
-                         line.Contains("1% Low", StringComparison.OrdinalIgnoreCase) ||
-                    line.Contains("Min FPS", StringComparison.OrdinalIgnoreCase) ||
-                         line.Contains("Percentile", StringComparison.OrdinalIgnoreCase))
-                {
-                    double val = ExtractNumberFromLine(line);
-                    if (val > 0) result.Parcentile99Fps = val;
-                }
-            }
 
-            result.RawSettingSummary = $"Разрешение: {result.Resolution}, Масштаб: {result.RenderScale}";
+                // Декодируем байты в обычный текст и Unicode (UTF-16LE для .sav файлов UE5)
+                string utf8Text = Encoding.UTF8.GetString(bytes);
+                string unicodeText = Encoding.Unicode.GetString(bytes);
+                return utf8Text + "\n" + unicodeText;
+            }
+            catch
+            {
+                return string.Empty;
+            }
         }
 
-        private static double ExtractNumberFromLine(string line)
+        private static bool ParseContent(string content, BenchmarkResult result)
         {
-            var matches = Regex.Matches(line, @"\d+([.,]\d+)?");
-            foreach (Match match in matches)
+            if (string.IsNullOrWhiteSpace(content)) return false;
+
+            bool foundAny = false;
+
+            // Поиск Среднего FPS
+            var avgMatch = Regex.Match(content, @"(?:Average\s*FPS|Avg\s*FPS|Средний\s*FPS|AverageFPS|AvgFPS)\D*?(\d+([.,]\d+)?)", RegexOptions.IgnoreCase);
+            if (avgMatch.Success && double.TryParse(avgMatch.Groups[1].Value.Replace(',', '.'), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double avg) && avg > 0)
             {
-                if (double.TryParse(match.Value.Replace(',', '.'), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double val))
-                {
-                    if (val > 0 && val < 1000) return val;
-                }
+                result.AverageFps = avg;
+                foundAny = true;
             }
-            return 0.0;
+
+            // Поиск 1% Low / 5-го перцентиля FPS
+            var lowMatch = Regex.Match(content, @"(?:1%\s*Low|5-й\s*перцентиль|Min\s*FPS|99%|Percentile|MinFPS)\D*?(\d+([.,]\d+)?)", RegexOptions.IgnoreCase);
+            if (lowMatch.Success && double.TryParse(lowMatch.Groups[1].Value.Replace(',', '.'), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double low) && low > 0)
+            {
+                result.Parcentile99Fps = low;
+                foundAny = true;
+            }
+
+            return foundAny;
         }
     }
 }
