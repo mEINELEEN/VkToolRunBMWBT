@@ -24,13 +24,13 @@ namespace VkToolRunBMWBT.Services
             {
                 var candidateDirectories = new List<string>();
 
-                // 1. Динамический путь к внешней папке (диск E:, D: и т.д.)
+                // 1. Динамический путь к папке Saved на внешнем диске (из RunnerService)
                 if (!string.IsNullOrEmpty(RunnerService.DetectedSavedFolderPath))
                 {
                     candidateDirectories.Add(RunnerService.DetectedSavedFolderPath);
                 }
 
-                // 2. Локальный путь AppData
+                // 2. Стандартный путь AppData на диске C:
                 string localAppDataSaved = Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"b1\Saved");
                 candidateDirectories.Add(localAppDataSaved);
@@ -60,9 +60,13 @@ namespace VkToolRunBMWBT.Services
 
                 if (latestFile != null)
                 {
-                    byte[] fileBytes = File.ReadAllBytes(latestFile.FullName);
+                    byte[] fileBytes;
+                    using (var stream = new FileStream(latestFile.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                    {
+                        fileBytes = new byte[stream.Length];
+                        stream.Read(fileBytes, 0, fileBytes.Length);
+                    }
 
-                    // Если это бинарный файл сейва .sav / .temp
                     if (latestFile.Extension.Equals(".sav", StringComparison.OrdinalIgnoreCase) ||
                         latestFile.Extension.Equals(".temp", StringComparison.OrdinalIgnoreCase))
                     {
@@ -70,7 +74,6 @@ namespace VkToolRunBMWBT.Services
                     }
                     else
                     {
-                        // Текстовый файл (.log, .txt, .csv)
                         string textContent = Encoding.UTF8.GetString(fileBytes);
                         ParseTextContent(textContent, result);
                     }
@@ -87,54 +90,116 @@ namespace VkToolRunBMWBT.Services
         }
 
         /// <summary>
-        /// Парсинг бинарных файлов сохранения Unreal Engine 5 (.sav)
+        /// Вытаскивает значения IntProperty, Int64Property и FloatProperty из бинарного файла .sav UE5
         /// </summary>
         private static void ParseBinarySavFile(byte[] bytes, BenchmarkResult result)
         {
             try
             {
-                // Ищем байтовые структуры FloatProperty в сейве UE5
                 string rawAscii = Encoding.ASCII.GetString(bytes);
+                string[] targetProperties = new[] { "IntProperty", "Int64Property", "FloatProperty" };
 
-                // Сканируем все возможные вхождения ключевых слов
-                List<float> extractedFloats = new List<float>();
+                var foundValues = new List<(string Name, double Value)>();
 
-                int index = 0;
-                while ((index = rawAscii.IndexOf("FloatProperty", index, StringComparison.Ordinal)) != -1)
+                foreach (var propType in targetProperties)
                 {
-                    // В UE5 значение float лежит со смещением 13–25 байт после слова FloatProperty
-                    for (int offset = 12; offset <= 28; offset += 4)
+                    int index = 0;
+                    while ((index = rawAscii.IndexOf(propType, index, StringComparison.Ordinal)) != -1)
                     {
-                        if (index + 13 + offset + 4 <= bytes.Length)
+                        string propName = ExtractPropertyNameBefore(bytes, index);
+                        double val = ExtractValueAfter(bytes, index + propType.Length, propType);
+
+                        if (val >= 1.0 && val <= 500.0)
                         {
-                            float val = BitConverter.ToSingle(bytes, index + 13 + offset);
-                            // Игровой FPS обычно находится в диапазоне от 5 до 300
-                            if (val >= 5.0f && val <= 300.0f)
-                            {
-                                extractedFloats.Add(val);
-                            }
+                            foundValues.Add((propName, val));
+                        }
+
+                        index += propType.Length;
+                    }
+                }
+
+                // 1. Сопоставление по имени свойства в сейве
+                foreach (var item in foundValues)
+                {
+                    string name = item.Name.ToLowerInvariant();
+                    if (result.AverageFps == 0 && (name.Contains("avg") || name.Contains("average") || (name.Contains("fps") && !name.Contains("min") && !name.Contains("percentile"))))
+                    {
+                        result.AverageFps = Math.Round(item.Value, 1);
+                    }
+                    else if (result.Parcentile99Fps == 0 && (name.Contains("min") || name.Contains("low") || name.Contains("percentile") || name.Contains("5th") || name.Contains("99")))
+                    {
+                        result.Parcentile99Fps = Math.Round(item.Value, 1);
+                    }
+                }
+
+                // 2. Резервный вариант: если имена свойств не совпали, берутся первые логичные значения из сейва
+                if (result.AverageFps == 0 && foundValues.Count > 0)
+                {
+                    var fpsCandidates = foundValues.Where(v => v.Value != 50.0 && v.Value != 100.0 && v.Value != 60.0).ToList();
+                    if (fpsCandidates.Count > 0)
+                    {
+                        result.AverageFps = Math.Round(fpsCandidates[0].Value, 1);
+                        if (fpsCandidates.Count > 1)
+                        {
+                            result.Parcentile99Fps = Math.Round(fpsCandidates[1].Value, 1);
                         }
                     }
-                    index += 13;
-                }
-
-                if (extractedFloats.Count >= 2)
-                {
-                    // Первый вытащенный float — Среднее значение, второй — 1% Low / 5-й перцентиль
-                    result.AverageFps = Math.Round(extractedFloats[0], 1);
-                    result.Parcentile99Fps = Math.Round(extractedFloats[1], 1);
-                }
-                else if (extractedFloats.Count == 1)
-                {
-                    result.AverageFps = Math.Round(extractedFloats[0], 1);
+                    else
+                    {
+                        result.AverageFps = Math.Round(foundValues[0].Value, 1);
+                    }
                 }
             }
             catch { }
         }
 
-        /// <summary>
-        /// Парсинг обычных текстовых логов (.log / .txt)
-        /// </summary>
+        private static string ExtractPropertyNameBefore(byte[] bytes, int propTypeIndex)
+        {
+            int nameEnd = propTypeIndex - 1;
+            while (nameEnd > 0 && bytes[nameEnd] == 0) nameEnd--;
+
+            int nameStart = nameEnd;
+            while (nameStart > 0 && bytes[nameStart] >= 32 && bytes[nameStart] <= 126)
+            {
+                nameStart--;
+            }
+
+            if (nameStart < nameEnd)
+            {
+                return Encoding.ASCII.GetString(bytes, nameStart + 1, nameEnd - nameStart);
+            }
+            return string.Empty;
+        }
+
+        private static double ExtractValueAfter(byte[] bytes, int startIndex, string propType)
+        {
+            for (int offset = 8; offset <= 32; offset++)
+            {
+                if (startIndex + offset + 4 <= bytes.Length)
+                {
+                    if (propType == "IntProperty")
+                    {
+                        int intVal = BitConverter.ToInt32(bytes, startIndex + offset);
+                        if (intVal >= 5 && intVal <= 300) return intVal;
+                    }
+                    else if (propType == "FloatProperty")
+                    {
+                        float floatVal = BitConverter.ToSingle(bytes, startIndex + offset);
+                        if (floatVal >= 5.0f && floatVal <= 300.0f && !float.IsNaN(floatVal) && !float.IsInfinity(floatVal))
+                        {
+                            return floatVal;
+                        }
+                    }
+                    else if (propType == "Int64Property" && startIndex + offset + 8 <= bytes.Length)
+                    {
+                        long longVal = BitConverter.ToInt64(bytes, startIndex + offset);
+                        if (longVal >= 5 && longVal <= 300) return longVal;
+                    }
+                }
+            }
+            return 0;
+        }
+
         private static void ParseTextContent(string content, BenchmarkResult result)
         {
             var avgMatch = Regex.Match(content, @"(?:Average\s*FPS|Avg\s*FPS|Средний\s*FPS|AverageFPS)\D*?(\d+([.,]\d+)?)", RegexOptions.IgnoreCase);
