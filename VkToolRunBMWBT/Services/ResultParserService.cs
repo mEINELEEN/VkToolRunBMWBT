@@ -13,6 +13,7 @@ namespace VkToolRunBMWBT.Services
     {
         public static BenchmarkResult GetLatestResult(string testName, string expectedResolution, string expectedScale)
         {
+        
             var result = new BenchmarkResult
             {
                 TestName = testName,
@@ -22,197 +23,160 @@ namespace VkToolRunBMWBT.Services
 
             try
             {
-                var candidateDirectories = new List<string>();
+                // 1. Определяем путь к файлу GameUserSettings.ini
+                string iniPath = GetIniFilePath();
 
-                // 1. Динамический путь к папке Saved на внешнем диске (из RunnerService)
-                if (!string.IsNullOrEmpty(RunnerService.DetectedSavedFolderPath))
-                {
-                    candidateDirectories.Add(RunnerService.DetectedSavedFolderPath);
-                }
-
-                // 2. Стандартный путь AppData на диске C:
-                string localAppDataSaved = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"b1\Saved");
-                candidateDirectories.Add(localAppDataSaved);
-
-                FileInfo latestFile = null;
-
-                foreach (var dirPath in candidateDirectories)
-                {
-                    if (Directory.Exists(dirPath))
-                    {
-                        var dir = new DirectoryInfo(dirPath);
-                        var file = dir.GetFiles("*.*", SearchOption.AllDirectories)
-                                      .Where(f => f.Extension.Equals(".sav", StringComparison.OrdinalIgnoreCase) ||
-                                                  f.Extension.Equals(".temp", StringComparison.OrdinalIgnoreCase) ||
-                                                  f.Extension.Equals(".log", StringComparison.OrdinalIgnoreCase) ||
-                                                  f.Extension.Equals(".txt", StringComparison.OrdinalIgnoreCase) ||
-                                                  f.Extension.Equals(".csv", StringComparison.OrdinalIgnoreCase))
-                                      .OrderByDescending(f => f.LastWriteTime)
-                                      .FirstOrDefault();
-
-                        if (file != null && (latestFile == null || file.LastWriteTime > latestFile.LastWriteTime))
-                        {
-                            latestFile = file;
-                        }
-                    }
-                }
-
-                if (latestFile != null)
-                {
-                    byte[] fileBytes;
-                    using (var stream = new FileStream(latestFile.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-                    {
-                        fileBytes = new byte[stream.Length];
-                        stream.Read(fileBytes, 0, fileBytes.Length);
-                    }
-
-                    if (latestFile.Extension.Equals(".sav", StringComparison.OrdinalIgnoreCase) ||
-                        latestFile.Extension.Equals(".temp", StringComparison.OrdinalIgnoreCase))
-                    {
-                        ParseBinarySavFile(fileBytes, result);
-                    }
-                    else
-                    {
-                        string textContent = Encoding.UTF8.GetString(fileBytes);
-                        ParseTextContent(textContent, result);
-                    }
-                }
-
-                result.RawSettingSummary = $"Разрешение: {result.Resolution}, Масштаб: {result.RenderScale}";
+                // 2. Считываем параметры графики из .ini файла в модель result
+                GameUserSettingsParser.ReadConfigFile(iniPath, result);
             }
             catch (Exception ex)
             {
-                result.RawSettingSummary = $"Ошибка при чтении результатов: {ex.Message}";
+                result.RawSettingSummary = $"Ошибка чтения .ini: {ex.Message}";
             }
 
             return result;
         }
 
         /// <summary>
-        /// Вытаскивает значения IntProperty, Int64Property и FloatProperty из бинарного файла .sav UE5
+        /// Поиск файла GameUserSettings.ini в папки игры или %LOCALAPPDATA%
         /// </summary>
-        private static void ParseBinarySavFile(byte[] bytes, BenchmarkResult result)
+        private static string GetIniFilePath()
+        {
+            // Проверяем путь, найденный при запуске процесса
+            if (!string.IsNullOrEmpty(RunnerService.DetectedSavedFolderPath))
+            {
+                string dynamicPath = Path.Combine(RunnerService.DetectedSavedFolderPath, @"Config\Windows\GameUserSettings.ini");
+                if (File.Exists(dynamicPath))
+                {
+                    return dynamicPath;
+                }
+            }
+
+            // Стандартный путь в AppData
+            return Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                @"b1\Saved\Config\Windows\GameUserSettings.ini");
+        }
+        
+
+        private static string FindLatestLogFile(out string debugFilesList)
+        {
+            debugFilesList = "Папка с логами пуста";
+            var candidateDirs = new List<string>();
+
+            if (!string.IsNullOrEmpty(RunnerService.DetectedSavedFolderPath))
+            {
+                candidateDirs.Add(Path.Combine(RunnerService.DetectedSavedFolderPath, "Logs"));
+            }
+
+            string localAppDataLogs = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"b1\Saved\Logs");
+            candidateDirs.Add(localAppDataLogs);
+
+            FileInfo newestLog = null;
+            var foundNames = new List<string>();
+
+            foreach (var dirPath in candidateDirs)
+            {
+                if (Directory.Exists(dirPath))
+                {
+                    var dir = new DirectoryInfo(dirPath);
+                    var files = dir.GetFiles("*.*", SearchOption.AllDirectories);
+
+                    foreach (var f in files)
+                    {
+                        foundNames.Add(f.Name);
+                        if ((f.Extension.Equals(".log", StringComparison.OrdinalIgnoreCase) ||
+                             f.Extension.Equals(".txt", StringComparison.OrdinalIgnoreCase)) &&
+                            !f.Name.StartsWith("cef", StringComparison.OrdinalIgnoreCase) &&
+                            !f.Name.StartsWith("UnrealCEF", StringComparison.OrdinalIgnoreCase))
+                        {
+                            if (newestLog == null || f.LastWriteTime > newestLog.LastWriteTime)
+                            {
+                                newestLog = f;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (foundNames.Count > 0)
+            {
+                debugFilesList = string.Join(", ", foundNames.Distinct());
+            }
+
+            return newestLog?.FullName;
+        }
+
+        private static string ReadLogFileWithShare(string filePath)
         {
             try
             {
-                string rawAscii = Encoding.ASCII.GetString(bytes);
-                string[] targetProperties = new[] { "IntProperty", "Int64Property", "FloatProperty" };
-
-                var foundValues = new List<(string Name, double Value)>();
-
-                foreach (var propType in targetProperties)
+                using (var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                using (var reader = new StreamReader(stream, Encoding.UTF8))
                 {
-                    int index = 0;
-                    while ((index = rawAscii.IndexOf(propType, index, StringComparison.Ordinal)) != -1)
-                    {
-                        string propName = ExtractPropertyNameBefore(bytes, index);
-                        double val = ExtractValueAfter(bytes, index + propType.Length, propType);
-
-                        if (val >= 1.0 && val <= 500.0)
-                        {
-                            foundValues.Add((propName, val));
-                        }
-
-                        index += propType.Length;
-                    }
-                }
-
-                // 1. Сопоставление по имени свойства в сейве
-                foreach (var item in foundValues)
-                {
-                    string name = item.Name.ToLowerInvariant();
-                    if (result.AverageFps == 0 && (name.Contains("avg") || name.Contains("average") || (name.Contains("fps") && !name.Contains("min") && !name.Contains("percentile"))))
-                    {
-                        result.AverageFps = Math.Round(item.Value, 1);
-                    }
-                    else if (result.Parcentile99Fps == 0 && (name.Contains("min") || name.Contains("low") || name.Contains("percentile") || name.Contains("5th") || name.Contains("99")))
-                    {
-                        result.Parcentile99Fps = Math.Round(item.Value, 1);
-                    }
-                }
-
-                // 2. Резервный вариант: если имена свойств не совпали, берутся первые логичные значения из сейва
-                if (result.AverageFps == 0 && foundValues.Count > 0)
-                {
-                    var fpsCandidates = foundValues.Where(v => v.Value != 50.0 && v.Value != 100.0 && v.Value != 60.0).ToList();
-                    if (fpsCandidates.Count > 0)
-                    {
-                        result.AverageFps = Math.Round(fpsCandidates[0].Value, 1);
-                        if (fpsCandidates.Count > 1)
-                        {
-                            result.Parcentile99Fps = Math.Round(fpsCandidates[1].Value, 1);
-                        }
-                    }
-                    else
-                    {
-                        result.AverageFps = Math.Round(foundValues[0].Value, 1);
-                    }
+                    return reader.ReadToEnd();
                 }
             }
-            catch { }
+            catch
+            {
+                return string.Empty;
+            }
+        }
+        private static void ParseLogContent(string content, BenchmarkResult result)
+        {
+            if (string.IsNullOrWhiteSpace(content)) return;
+
+            string[] lines = content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.RemoveEmptyEntries);
+
+            for (int i = lines.Length - 1; i >= 0; i--)
+            {
+                string line = lines[i];
+
+                if (result.AverageFps == 0 &&
+                   (line.Contains("Average FPS", StringComparison.OrdinalIgnoreCase) ||
+                    line.Contains("Avg FPS", StringComparison.OrdinalIgnoreCase) ||
+                    line.Contains("AverageFPS", StringComparison.OrdinalIgnoreCase) ||
+                    line.Contains("FPS:", StringComparison.OrdinalIgnoreCase)))
+                {
+                    double val = ExtractNumber(line);
+                    if (val > 0) result.AverageFps = val;
+                }
+
+                if (result.Parcentile99Fps == 0 &&
+                   (line.Contains("1% Low", StringComparison.OrdinalIgnoreCase) ||
+                    line.Contains("Min FPS", StringComparison.OrdinalIgnoreCase) ||
+                    line.Contains("Percentile", StringComparison.OrdinalIgnoreCase) ||
+                    line.Contains("Low", StringComparison.OrdinalIgnoreCase)))
+                {
+                    double val = ExtractNumber(line);
+                    if (val > 0) result.Parcentile99Fps = val;
+                }
+
+                if (result.AverageFps > 0 && result.Parcentile99Fps > 0) break;
+            }
+
+            if (result.AverageFps == 0)
+            {
+                var match = Regex.Match(content, @"(?:Average|Avg|FPS)\D*?(\d+([.,]\d+)?)", RegexOptions.IgnoreCase);
+                if (match.Success && double.TryParse(match.Groups[1].Value.Replace(',', '.'), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double avg))
+                {
+                    result.AverageFps = avg;
+                }
+            }
         }
 
-        private static string ExtractPropertyNameBefore(byte[] bytes, int propTypeIndex)
+        private static double ExtractNumber(string line)
         {
-            int nameEnd = propTypeIndex - 1;
-            while (nameEnd > 0 && bytes[nameEnd] == 0) nameEnd--;
-
-            int nameStart = nameEnd;
-            while (nameStart > 0 && bytes[nameStart] >= 32 && bytes[nameStart] <= 126)
+            var matches = Regex.Matches(line, @"\d+([.,]\d+)?");
+            foreach (Match m in matches)
             {
-                nameStart--;
-            }
-
-            if (nameStart < nameEnd)
-            {
-                return Encoding.ASCII.GetString(bytes, nameStart + 1, nameEnd - nameStart);
-            }
-            return string.Empty;
-        }
-
-        private static double ExtractValueAfter(byte[] bytes, int startIndex, string propType)
-        {
-            for (int offset = 8; offset <= 32; offset++)
-            {
-                if (startIndex + offset + 4 <= bytes.Length)
+                if (double.TryParse(m.Value.Replace(',', '.'), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double val))
                 {
-                    if (propType == "IntProperty")
-                    {
-                        int intVal = BitConverter.ToInt32(bytes, startIndex + offset);
-                        if (intVal >= 5 && intVal <= 300) return intVal;
-                    }
-                    else if (propType == "FloatProperty")
-                    {
-                        float floatVal = BitConverter.ToSingle(bytes, startIndex + offset);
-                        if (floatVal >= 5.0f && floatVal <= 300.0f && !float.IsNaN(floatVal) && !float.IsInfinity(floatVal))
-                        {
-                            return floatVal;
-                        }
-                    }
-                    else if (propType == "Int64Property" && startIndex + offset + 8 <= bytes.Length)
-                    {
-                        long longVal = BitConverter.ToInt64(bytes, startIndex + offset);
-                        if (longVal >= 5 && longVal <= 300) return longVal;
-                    }
+                    if (val > 0 && val < 1000) return val;
                 }
             }
             return 0;
-        }
-
-        private static void ParseTextContent(string content, BenchmarkResult result)
-        {
-            var avgMatch = Regex.Match(content, @"(?:Average\s*FPS|Avg\s*FPS|Средний\s*FPS|AverageFPS)\D*?(\d+([.,]\d+)?)", RegexOptions.IgnoreCase);
-            if (avgMatch.Success && double.TryParse(avgMatch.Groups[1].Value.Replace(',', '.'), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double avg))
-            {
-                result.AverageFps = avg;
-            }
-
-            var lowMatch = Regex.Match(content, @"(?:1%\s*Low|5-й\s*перцентиль|Min\s*FPS|Percentile)\D*?(\d+([.,]\d+)?)", RegexOptions.IgnoreCase);
-            if (lowMatch.Success && double.TryParse(lowMatch.Groups[1].Value.Replace(',', '.'), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double low))
-            {
-                result.Parcentile99Fps = low;
-            }
         }
     }
 }
