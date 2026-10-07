@@ -17,6 +17,7 @@ namespace VkToolRunBMWBT.Model
         public string RayTrasingSetting { get; set; } = string.Empty;
         public string OverallQualityPreset { get; set; } = string.Empty;
         public string RawSettingSummary { get; set; } = string.Empty; // текстовая сводка настроек
+        public string RenderScale { get; set; } = string.Empty;
 
 
 
