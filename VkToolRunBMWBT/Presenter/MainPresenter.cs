@@ -33,10 +33,19 @@ namespace VkToolRunBMWBT.Presenter
                 var hardwareInfo = await Task.Run(() => HardwareService.GetSystemInfo());
                 _view.DisplayHardwareInfo(hardwareInfo);
 
-                _view.UpdateStatus("Запуск теста CPU...", 40);
+                // резервная копия пользовательских настроек
+                ConfigService.BackupConfig();
+
+                _view.UpdateStatus("Применение настроек CPU...", 25);
+                ConfigService.ApplyCpuTestConfig();
+
+                _view.UpdateStatus("Запуск теста CPU...", 35);
                 await Task.Delay(1000); // имитация задержки
 
-                _view.UpdateStatus("Запуск теста GPU...", 70);
+                _view.UpdateStatus("Применение настроек GPU...", 65);
+                ConfigService.ApplyGpuTestConfig();
+
+                _view.UpdateStatus("Запуск теста GPU...", 75);
                 await Task.Delay(1000); // имитация задержки
                 
                 _view.UpdateStatus("Тест завершен.", 100);
@@ -48,6 +57,7 @@ namespace VkToolRunBMWBT.Presenter
             }
             finally
             {
+                ConfigService.RestoreConfig();
                 _view.EnableControls(true);
             }
         }
