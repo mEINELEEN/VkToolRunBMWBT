@@ -132,14 +132,14 @@ namespace VkToolRunBMWBT.Presenter
                     return;
 
                 var report = new StringBuilder();
-                report.AppendLine("# Black Myth: Wukong Benchmark Report");
-                report.AppendLine($"**Дата тестирования:** {DateTime.Now:dd.MM.yyyy HH:mm:ss}");
+                report.AppendLine("Black Myth: Wukong Benchmark Report");
+                report.AppendLine($"Дата тестирования: {DateTime.Now:dd.MM.yyyy HH:mm:ss}");
                 report.AppendLine();
-                report.AppendLine("## Характеристики системы");
-                report.AppendLine($"- **CPU:** {_hardwareInfo.CpuName}");
-                report.AppendLine($"- **GPU:** {_hardwareInfo.GpuName}");
-                report.AppendLine($"- **RAM:** {_hardwareInfo.RamCapacity}");
-                report.AppendLine($"- **OS:** {_hardwareInfo.OsVersion}");
+                report.AppendLine("Характеристики вашей системы:");
+                report.AppendLine($"- CPU: {_hardwareInfo.CpuName}");
+                report.AppendLine($"- GPU: {_hardwareInfo.GpuName}");
+                report.AppendLine($"- RAM: {_hardwareInfo.RamCapacity}");
+                report.AppendLine($"- OS: {_hardwareInfo.OsVersion}");
                 report.AppendLine();
                 AppendResultToReport(report, "CPU Test (низкая нагрузка на GPU)", _cpuResult);
                 AppendResultToReport(report, "GPU Test (родное разрешение дисплея)", _gpuResult);
@@ -155,20 +155,20 @@ namespace VkToolRunBMWBT.Presenter
 
         private static void AppendResultToReport(StringBuilder report, string title, BenchmarkResult result)
         {
-            report.AppendLine($"## {title}");
-            report.AppendLine($"- **Средний FPS:** {FormatMetric(result.AverageFps)}");
+            report.AppendLine($"{title}");
+            report.AppendLine($"- Средний FPS: {FormatMetric(result.AverageFps)}");
             string lowLabel = result.IsOnePercentLowEstimated ? "1% Low FPS (расчётный по CPU/GPU frame time)" : "1% Low FPS";
-            report.AppendLine($"- **{lowLabel}:** {FormatOptionalMetric(result.Parcentile99Fps)}");
-            report.AppendLine($"- **Минимальный FPS:** {FormatOptionalMetric(result.MinFps)}");
-            report.AppendLine($"- **Максимальный FPS:** {FormatOptionalMetric(result.MaxFps)}");
-            report.AppendLine($"- **Разрешение:** {result.Resolution}");
-            report.AppendLine($"- **Масштаб рендера:** {result.RenderScale}");
-            report.AppendLine($"- **Среднее время кадра CPU:** {FormatOptionalMetric(result.CpuFrameTimeMs)} мс");
-            report.AppendLine($"- **Среднее время кадра GPU:** {FormatOptionalMetric(result.GpuFrameTimeMs)} мс");
-            report.AppendLine($"- **Загрузка CPU/GPU:** {FormatOptionalMetric(result.CpuUsagePercent)}% / {FormatOptionalMetric(result.GpuUsagePercent)}%");
-            report.AppendLine($"- **Использование VRAM:** {FormatOptionalMetric(result.VramGb)} GB");
-            report.AppendLine($"- **Настройки:** {result.RawSettingSummary}");
-            report.AppendLine($"- **JSON:** {result.ResultFilePath}");
+            report.AppendLine($"- {lowLabel}: {FormatOptionalMetric(result.Parcentile99Fps)}");
+            report.AppendLine($"- Минимальный FPS: {FormatOptionalMetric(result.MinFps)}");
+            report.AppendLine($"- Максимальный FPS: {FormatOptionalMetric(result.MaxFps)}");
+            report.AppendLine($"- Разрешение: {result.Resolution}");
+            report.AppendLine($"- Масштаб рендера: {result.RenderScale}");
+            report.AppendLine($"- Среднее время кадра CPU: {FormatOptionalMetric(result.CpuFrameTimeMs)} мс");
+            report.AppendLine($"- Среднее время кадра GPU: {FormatOptionalMetric(result.GpuFrameTimeMs)} мс");
+            report.AppendLine($"- Загрузка CPU/GPU: {FormatOptionalMetric(result.CpuUsagePercent)}% / {FormatOptionalMetric(result.GpuUsagePercent)}%");
+            report.AppendLine($"- Использование VRAM: {FormatOptionalMetric(result.VramGb)} GB");
+            report.AppendLine($"- Настройки: {result.RawSettingSummary}");
+            report.AppendLine($"- JSON: {result.ResultFilePath}");
             report.AppendLine();
         }
 
