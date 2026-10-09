@@ -96,6 +96,18 @@ namespace VkToolRunBMWBT
             btnStart.Enabled = enable;
             btnSaveReport.Enabled = enable;
         }
+
+        public void ClearBenchmarkResults()
+        {
+            if (InvokeRequired)
+            {
+                Invoke(new Action(ClearBenchmarkResults));
+                return;
+            }
+
+            txtResults.Clear();
+        }
+
         #endregion
 
     }

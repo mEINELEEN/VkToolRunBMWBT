@@ -1,160 +1,237 @@
-﻿using System;
-using System.Collections.Generic;
-using System.IO;
+﻿using System.Text;
 
 namespace VkToolRunBMWBT.Services
 {
+    /// <summary>
+    /// Управляет GameUserSettings.ini. Оригинальные байты держатся в памяти и
+    /// восстанавливаются даже при исключении во время любого из проходов.
+    /// </summary>
     public static class ConfigService
     {
-        // путь к файлу настроек Unreal Engine 5 для Black Myth: Wukong Benchmark
-        private static string ConfigFilePath => Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            @"b1\Saved\Config\Windows\GameUserSettings.ini");
+        private const string GameSettingsSection = "/Script/Engine.GameUserSettings";
+        private const string ScalabilitySection = "ScalabilityGroups";
 
-        private static string BackupFilePath => ConfigFilePath + ".bak";
+        private static string? _activeConfigFilePath;
+        private static byte[]? _originalConfigBytes;
+        private static bool _configExistedBeforeBackup;
+        private static bool _backupTaken;
 
-        // создает резервную копию оригинального файла настроек
-    
+        public static string CurrentConfigFilePath => _activeConfigFilePath ?? ResolveConfigFilePath();
+
         public static void BackupConfig()
         {
-            try
-            {
-                if (File.Exists(ConfigFilePath))
-                {
-                    File.Copy(ConfigFilePath, BackupFilePath, overwrite: true);
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Ошибка при резервном копировании конфига: {ex.Message}");
-            }
-        }
+            if (_backupTaken)
+                throw new InvalidOperationException("Резервная копия уже создана. Сначала восстановите конфигурацию предыдущего теста.");
 
-        // восстанавливает оригинальный файл настроек из резервной копии
+            _activeConfigFilePath = ResolveConfigFilePath();
+            string directory = Path.GetDirectoryName(_activeConfigFilePath)
+                ?? throw new InvalidOperationException("Не удалось определить папку GameUserSettings.ini.");
+
+            Directory.CreateDirectory(directory);
+            _configExistedBeforeBackup = File.Exists(_activeConfigFilePath);
+            _originalConfigBytes = _configExistedBeforeBackup
+                ? File.ReadAllBytes(_activeConfigFilePath)
+                : Array.Empty<byte>();
+            _backupTaken = true;
+        }
 
         public static void RestoreConfig()
         {
-            try
+            if (!_backupTaken || string.IsNullOrWhiteSpace(_activeConfigFilePath))
+                return;
+
+            string path = _activeConfigFilePath;
+            string directory = Path.GetDirectoryName(path)
+                ?? throw new InvalidOperationException("Не удалось определить папку для восстановления конфигурации.");
+
+            if (_configExistedBeforeBackup)
             {
-                if (File.Exists(BackupFilePath))
+                Directory.CreateDirectory(directory);
+                string temporaryPath = path + ".restore.tmp";
+                try
                 {
-                    File.Copy(BackupFilePath, ConfigFilePath, overwrite: true);
-                    File.Delete(BackupFilePath);
+                    File.WriteAllBytes(temporaryPath, _originalConfigBytes ?? Array.Empty<byte>());
+                    File.Move(temporaryPath, path, overwrite: true);
+                }
+                finally
+                {
+                    if (File.Exists(temporaryPath))
+                        File.Delete(temporaryPath);
                 }
             }
-            catch (Exception ex)
+            else if (File.Exists(path))
             {
-                Console.WriteLine($"Ошибка при восстановлении конфига: {ex.Message}");
+                // Файл был создан только для автотеста — после завершения он не должен оставаться.
+                File.Delete(path);
             }
+
+            _originalConfigBytes = null;
+            _configExistedBeforeBackup = false;
+            _backupTaken = false;
+            _activeConfigFilePath = null;
         }
 
-
-        // применяет настройки для CPU-теста (Минимальная нагрузка на GPU)
- 
+        /// <summary>CPU-проход: 1280×720, рендер 25%, минимальные настройки.</summary>
         public static void ApplyCpuTestConfig()
         {
-            EnsureConfigFileExists();
-
-            // Пониженное разрешение и рендер-скейл 50%
-            UpdateIniKey("ResolutionSizeX", "1280");
-            UpdateIniKey("ResolutionSizeY", "720");
-            UpdateIniKey("LastUserConfirmedResolutionSizeX", "1280");
-            UpdateIniKey("LastUserConfirmedResolutionSizeY", "720");
-            UpdateIniKey("DesiredScreenWidth", "1280");
-            UpdateIniKey("DesiredScreenHeight", "720");
-            UpdateIniKey("sg.ResolutionQuality", "50.000000");
-
-            // Качество графики: Low (0)
-            UpdateIniKey("sg.ViewDistanceQuality", "0");
-            UpdateIniKey("sg.AntiAliasingQuality", "0");
-            UpdateIniKey("sg.ShadowQuality", "0");
-            UpdateIniKey("sg.GlobalIlluminationQuality", "0");
-            UpdateIniKey("sg.ReflectionQuality", "0");
-            UpdateIniKey("sg.PostProcessQuality", "0");
-            UpdateIniKey("sg.TextureQuality", "0");
-            UpdateIniKey("sg.EffectsQuality", "0");
-            UpdateIniKey("sg.FoliageQuality", "0");
-            UpdateIniKey("sg.ShadingQuality", "0");
-
-            // Отключение ограничений FPS
-            UpdateIniKey("bUseVSync", "False");
-            UpdateIniKey("FrameRateLimit", "0.000000");
+            ApplyProfile(width: 1280, height: 720, renderPercent: 25, qualityLevel: 0);
         }
 
+        /// <summary>GPU-проход: родное разрешение основного экрана, рендер 100%, Cinematic.</summary>
+        public static void ApplyGpuTestConfig(int width, int height)
+        {
+            if (width <= 0 || height <= 0)
+                throw new ArgumentOutOfRangeException(nameof(width), "Разрешение GPU-теста должно быть больше нуля.");
 
-        // Применяет настройки для GPU-теста (Максимальная нагрузка на GPU)
+            ApplyProfile(width, height, renderPercent: 100, qualityLevel: 4);
+        }
 
         public static void ApplyGpuTestConfig()
         {
+            var resolution = RunnerService.GetDesktopResolution();
+            ApplyGpuTestConfig(resolution.Width, resolution.Height);
+        }
+
+        private static void ApplyProfile(int width, int height, int renderPercent, int qualityLevel)
+        {
             EnsureConfigFileExists();
 
-            // Максимальное разрешение и рендер-скейл 100%
-            UpdateIniKey("ResolutionSizeX", "3840");
-            UpdateIniKey("ResolutionSizeY", "2160");
-            UpdateIniKey("LastUserConfirmedResolutionSizeX", "3840");
-            UpdateIniKey("LastUserConfirmedResolutionSizeY", "2160");
-            UpdateIniKey("DesiredScreenWidth", "3840");
-            UpdateIniKey("DesiredScreenHeight", "2160");
-            UpdateIniKey("sg.ResolutionQuality", "100.000000");
+            string[][] gameSettings =
+            {
+                new[] { "ResolutionSizeX", width.ToString() },
+                new[] { "ResolutionSizeY", height.ToString() },
+                new[] { "LastUserConfirmedResolutionSizeX", width.ToString() },
+                new[] { "LastUserConfirmedResolutionSizeY", height.ToString() },
+                new[] { "DesiredScreenWidth", width.ToString() },
+                new[] { "DesiredScreenHeight", height.ToString() },
+                new[] { "bUseVSync", "False" },
+                new[] { "FrameRateLimit", "0.000000" }
+            };
 
-            // Качество графики: Cinematic/Ultra (3 или 4)
-            UpdateIniKey("sg.ViewDistanceQuality", "3");
-            UpdateIniKey("sg.AntiAliasingQuality", "3");
-            UpdateIniKey("sg.ShadowQuality", "3");
-            UpdateIniKey("sg.GlobalIlluminationQuality", "3");
-            UpdateIniKey("sg.ReflectionQuality", "3");
-            UpdateIniKey("sg.PostProcessQuality", "3");
-            UpdateIniKey("sg.TextureQuality", "3");
-            UpdateIniKey("sg.EffectsQuality", "3");
-            UpdateIniKey("sg.FoliageQuality", "3");
-            UpdateIniKey("sg.ShadingQuality", "3");
+            foreach (string[] item in gameSettings)
+                UpdateIniKey(GameSettingsSection, item[0], item[1]);
 
-            // Отключение вертикальной синхронизации
-            UpdateIniKey("bUseVSync", "False");
-            UpdateIniKey("FrameRateLimit", "0.000000");
+            UpdateIniKey(ScalabilitySection, "sg.ResolutionQuality", $"{renderPercent}.000000");
+
+            string[] qualityKeys =
+            {
+                "sg.ViewDistanceQuality",
+                "sg.AntiAliasingQuality",
+                "sg.ShadowQuality",
+                "sg.GlobalIlluminationQuality",
+                "sg.ReflectionQuality",
+                "sg.PostProcessQuality",
+                "sg.TextureQuality",
+                "sg.EffectsQuality",
+                "sg.FoliageQuality",
+                "sg.ShadingQuality"
+            };
+
+            foreach (string key in qualityKeys)
+                UpdateIniKey(ScalabilitySection, key, qualityLevel.ToString());
+        }
+
+        private static string ResolveConfigFilePath()
+        {
+            string localAppDataPath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "b1", "Saved", "Config", "Windows", "GameUserSettings.ini");
+
+            string gameFolder = RunnerService.GetGameInstallFolder();
+            if (!string.IsNullOrWhiteSpace(gameFolder))
+            {
+                string installedPath = Path.Combine(gameFolder, "b1", "Saved", "Config", "Windows", "GameUserSettings.ini");
+
+                // Если конфиг присутствует в папке установленного приложения, он приоритетный.
+                // Если его нет, но есть AppData-конфиг, используем существующий пользовательский файл.
+                if (File.Exists(installedPath)) return installedPath;
+                if (File.Exists(localAppDataPath)) return localAppDataPath;
+
+                // Поведение соответствует исходному консольному решению: создать конфиг в папке Tool.
+                return installedPath;
+            }
+
+            return localAppDataPath;
         }
 
         private static void EnsureConfigFileExists()
         {
-            string directory = Path.GetDirectoryName(ConfigFilePath);
-            if (!Directory.Exists(directory))
-            {
-                Directory.CreateDirectory(directory);
-            }
+            string path = CurrentConfigFilePath;
+            string? directory = Path.GetDirectoryName(path);
+            if (string.IsNullOrWhiteSpace(directory))
+                throw new InvalidOperationException("Не удалось определить папку настроек игры.");
 
-            if (!File.Exists(ConfigFilePath))
+            Directory.CreateDirectory(directory);
+            if (!File.Exists(path))
             {
-                File.WriteAllText(ConfigFilePath, "[/Script/Engine.GameUserSettings]\n[ScalabilityGroups]\n");
+                File.WriteAllText(path,
+                    $"[{GameSettingsSection}]\r\n[{ScalabilitySection}]\r\n",
+                    new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
             }
         }
 
-
-        // Вспомогательный метод обновления ключа в INI-файле без нарушения структуры
-
-        private static void UpdateIniKey(string key, string value)
+        /// <summary>
+        /// Обновляет ключ только внутри нужной INI-секции. Это важно, когда один ключ
+        /// встречается в нескольких секциях; другие разделы файла не затрагиваются.
+        /// </summary>
+        private static void UpdateIniKey(string sectionName, string key, string value)
         {
-            if (!File.Exists(ConfigFilePath)) return;
+            string path = CurrentConfigFilePath;
+            var lines = File.Exists(path)
+                ? File.ReadAllLines(path, Encoding.UTF8).ToList()
+                : new List<string>();
 
-            string[] lines = File.ReadAllLines(ConfigFilePath);
-            bool keyFound = false;
-
-            for (int i = 0; i < lines.Length; i++)
+            int sectionStart = FindSectionStart(lines, sectionName);
+            if (sectionStart < 0)
             {
-                if (lines[i].TrimStart().StartsWith(key + "=", StringComparison.OrdinalIgnoreCase))
-                {
-                    lines[i] = $"{key}={value}";
-                    keyFound = true;
-                    break;
-                }
+                if (lines.Count > 0 && !string.IsNullOrWhiteSpace(lines[^1]))
+                    lines.Add(string.Empty);
+                lines.Add($"[{sectionName}]");
+                sectionStart = lines.Count - 1;
             }
 
-            if (!keyFound)
+            int sectionEnd = FindNextSection(lines, sectionStart + 1);
+            bool updated = false;
+            for (int i = sectionStart + 1; i < sectionEnd; i++)
             {
-                var lineList = new List<string>(lines) { $"{key}={value}" };
-                lines = lineList.ToArray();
+                string trimmed = lines[i].TrimStart();
+                if (!trimmed.StartsWith(key + "=", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                lines[i] = $"{key}={value}";
+                updated = true;
             }
 
-            File.WriteAllLines(ConfigFilePath, lines);
+            if (!updated)
+            {
+                sectionEnd = FindNextSection(lines, sectionStart + 1);
+                lines.Insert(sectionEnd, $"{key}={value}");
+            }
+
+            File.WriteAllText(path, string.Join(Environment.NewLine, lines) + Environment.NewLine,
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        }
+
+        private static int FindSectionStart(List<string> lines, string sectionName)
+        {
+            string expected = $"[{sectionName.Trim('[', ']')}]";
+            for (int i = 0; i < lines.Count; i++)
+            {
+                if (string.Equals(lines[i].Trim(), expected, StringComparison.OrdinalIgnoreCase))
+                    return i;
+            }
+            return -1;
+        }
+
+        private static int FindNextSection(List<string> lines, int startIndex)
+        {
+            for (int i = startIndex; i < lines.Count; i++)
+            {
+                string line = lines[i].Trim();
+                if (line.Length >= 2 && line[0] == '[' && line[^1] == ']')
+                    return i;
+            }
+            return lines.Count;
         }
     }
 }

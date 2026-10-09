@@ -19,6 +19,7 @@ namespace VkToolRunBMWBT.View
         void DisplayHardwareInfo(HardwareInfo hardwareInfo);
         void DisplayCpuBenchmarkResult(BenchmarkResult result);
         void DisplayGpuBenchmarkResult(BenchmarkResult result);
+        void ClearBenchmarkResults();
         void UpdateStatus(string message, int progressPercent);
         void ShowError(string message);
         void EnableControls(bool enable);
