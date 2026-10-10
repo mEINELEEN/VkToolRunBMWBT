@@ -108,12 +108,12 @@
             lblStatus.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
             lblStatus.AutoSize = true;
             lblStatus.ForeColor = SystemColors.Control;
-            lblStatus.Location = new Point(401, 588);
+            lblStatus.Location = new Point(12, 587);
             lblStatus.Name = "lblStatus";
             lblStatus.Size = new Size(115, 20);
             lblStatus.TabIndex = 5;
             lblStatus.Text = "Готов к запуску";
-            lblStatus.TextAlign = ContentAlignment.MiddleCenter;
+            lblStatus.TextAlign = ContentAlignment.MiddleLeft;
             // 
             // grpResult
             // 
